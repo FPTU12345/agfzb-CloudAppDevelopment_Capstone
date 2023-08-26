@@ -9,6 +9,7 @@ from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
 from ibm_watson.natural_language_understanding_v1 import Features, SentimentOptions
 
 def get_request(url, api_key=False, **kwargs):
+    print(kwargs)
     print(f"GET from {url}")
     if api_key:
         try:
