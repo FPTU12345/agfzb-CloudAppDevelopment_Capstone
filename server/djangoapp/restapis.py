@@ -3,7 +3,7 @@ import json
 import os
 from .models import CarDealer, DealerReview
 from requests.auth import HTTPBasicAuth
-from decouple import config
+# from decouple import config
 from ibm_watson import NaturalLanguageUnderstandingV1
 from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
 from ibm_watson.natural_language_understanding_v1 import Features, SentimentOptions
@@ -99,22 +99,15 @@ def get_dealer_reviews_from_cf(url, dealer_id):
     return results
 
 def analyze_review_sentiments(review_text):
-    try:
-        if os.environ['env_type'] == 'PRODUCTION':
-            url = os.environ['WATSON_NLU_URL']
-            api_key = os.environ["WATSON_NLU_API_KEY"]
-    except KeyError:
-        url = config('WATSON_NLU_URL')
-        api_key = config('WATSON_NLU_API_KEY')
+    api_key = "jodKrssFMD-TIzy9ZBjreDhAQXunBZ0QADPvvm84keIG"
+    url = "https://api.au-syd.natural-language-understanding.watson.cloud.ibm.com/instances/ed95a740-16c3-4916-a3a8-2896f23216f0"
     version = '2021-08-01'
     authenticator = IAMAuthenticator(api_key)
-    nlu = NaturalLanguageUnderstandingV1(
-        version=version, authenticator=authenticator)
+    nlu = NaturalLanguageUnderstandingV1(version=version, authenticator=authenticator)
     nlu.set_service_url(url)
     try:
         response = nlu.analyze(text=review_text, features=Features(
             sentiment=SentimentOptions())).get_result()
-        print(json.dumps(response))
         sentiment_label = response["sentiment"]["document"]["label"]
     except:
         print("Review is too short for sentiment analysis. Assigning default sentiment value 'neutral' instead")
