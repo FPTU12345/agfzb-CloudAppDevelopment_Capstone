@@ -1,143 +1,113 @@
-from django.shortcuts import render
-from django.http import HttpResponseRedirect, HttpResponse
-from django.contrib.auth.models import User
-from django.shortcuts import get_object_or_404, render, redirect
-from .models import CarModel
-from .restapis import get_dealer_by_id, get_dealers_from_cf, get_dealers_by_state, get_dealer_reviews_from_cf, post_request
-from django.contrib.auth import login, logout, authenticate
-from django.contrib import messages
-from datetime import datetime
-import logging
+import requests
 import json
-logger = logging.getLogger(__name__)
+from . import models
+from requests.auth import HTTPBasicAuth
+from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
+from ibm_watson import NaturalLanguageUnderstandingV1
+from ibm_watson.natural_language_understanding_v1 import Features,SentimentOptions
 
-def about(request):
-    context = {}
-    if request.method == "GET":
-        return render(request, 'djangoapp/about.html', context)
-
-def contact(request):
-    context = {}
-    if request.method == "GET":
-        return render(request, 'djangoapp/contact.html', context)
-
-def login_request(request):
-    context = {}
-    if request.method == "POST":
-        username = request.POST['username']
-        password = request.POST['psw']
-        user = authenticate(username=username, password=password)
-        if user is not None:
-            login(request, user)
-            return redirect('djangoapp:index')
+def get_request(url, **kwargs):
+    api_key = kwargs.get("api_key")
+    print("GET from {} ".format(url))
+    try:
+        if api_key:
+            params = dict()
+            params["text"] = kwargs["text"]
+            params["version"] = kwargs["version"]
+            params["features"] = kwargs["features"]
+            params["return_analyzed_text"] = kwargs["return_analyzed_text"]
+            response = requests.get(url, params=params, headers={'Content-Type': 'application/json'},
+                                    auth=HTTPBasicAuth('apikey', api_key))
         else:
-            context['message'] = "Invalid username or password."
-            return render(request, 'djangoapp/login.html', context)
-    else:
-        return render(request, 'djangoapp/login.html', context)
+            response = requests.get(url, headers={'Content-Type': 'application/json'},
+                                    params=kwargs)
+    except:
+        print("Network exception occurred")
+    status_code = response.status_code
+    print("With status {} ".format(status_code))
+    json_data = json.loads(response.text)
+    return json_data
 
-def logout_request(request):
-    print("Logging out `{}`...".format(request.user.username))
-    logout(request)
-    return redirect('djangoapp:index')
+def post_request(url, json_payload, **kwargs):
+    try:
+        response = requests.post(url, json=json_payload, params=kwargs)
+    except:
+        print("Something went wrong")
+    return response
 
-def registration_request(request):
-    context = {}
-    if request.method == 'GET':
-        return render(request, 'djangoapp/registration.html', context)
-    elif request.method == 'POST':
-        username = request.POST['username']
-        password = request.POST['psw']
-        first_name = request.POST['firstname']
-        last_name = request.POST['lastname']
-        user_exist = False
-        try:
-            User.objects.get(username=username)
-            user_exist = True
-        except:
-            logger.debug("{} is new user".format(username))
-        if not user_exist:
-            user = User.objects.create_user(username=username, first_name=first_name, last_name=last_name, password=password)
-            login(request, user)
-            return redirect("/djangoapp/")
-        else:
-            return render(request, 'djangoapp/registration.html', context)
+def get_dealers_from_cf(url, **kwargs):
+    results = []
+    json_result = get_request(url)
+    if json_result:
+        dealers = json_result
+        for dealer in dealers:
+            dealer_doc = dealer
+            dealer_obj = models.CarDealer(address=dealer_doc["address"], city=dealer_doc["city"], full_name=dealer_doc["full_name"],
+                                   id=dealer_doc["id"], lat=dealer_doc["lat"], long=dealer_doc["long"],
+                                   short_name=dealer_doc["short_name"],
+                                   st=dealer_doc["st"], zip=dealer_doc["zip"])
+            results.append(dealer_obj)
+    return results
 
-# Update the `get_dealerships` view to render the index page with a list of dealerships
-def get_dealerships(request):
-    if request.method == "GET":
-        context = {}
-        url = "https://9bebcb01.eu-de.apigw.appdomain.cloud/api/dealership"
-        # Get dealers from the Cloudant DB
-        context["dealerships"] = get_dealers_from_cf(url)
+def get_dealer_by_id_from_cf(url, id):
+    json_result = get_request(url, id=id)
+    if json_result:
+        dealers = json_result
+        dealer_doc = dealers[0] 
+        dealer_obj = models.CarDealer(address=dealer_doc["address"], city=dealer_doc["city"], full_name=dealer_doc["full_name"],
+                                   id=dealer_doc["id"], lat=dealer_doc["lat"], long=dealer_doc["long"],
+                                   short_name=dealer_doc["short_name"],
+                                   st=dealer_doc["st"], zip=dealer_doc["zip"])
+    return dealer_obj
 
-        # dealer_names = ' '.join([dealer.short_name for dealer in context["dealerships"]])
-        # return HttpResponse(dealer_names)
+def get_dealer_reviews_by_id_from_cf(url, dealerId):
+    results = []
+    json_result = get_request(url, id=dealerId)
+    if json_result:
+        reviews = json_result
+        for review in reviews:
+            try:
+                review_obj = models.DealerReview(
+                    name = review["name"], 
+                    dealership = review["dealership"], 
+                    review = review["review"],
+                    purchase=review["purchase"],
+                    purchase_date = review["purchase_date"],
+                    car_make = review['car_make'],
+                    car_model = review['car_model'],
+                    car_year= review['car_year'],
+                    sentiment= "none"
+                )
+            except:
+                review_obj = models.DealerReview(
+                    name = review["name"], 
+                    dealership = review["dealership"],
+                    review = review["review"], 
+                    purchase=review["purchase"],
+                    purchase_date = 'none',
+                    car_make = 'none',
+                    car_model = 'none',
+                    car_year= 'none',
+                    sentiment= "none"
+                )
+            review_obj.sentiment = analyze_review_sentiments(review_obj.review)
+            results.append(review_obj)
+    return results
 
-        return render(request, 'djangoapp/index.html', context)
-
-
-# Create a `get_dealer_details` view to render the reviews of a dealer
-def get_dealer_details(request, dealer_id):
-    context = {}
-    if request.method == "GET":
-        url = 'https://9bebcb01.eu-de.apigw.appdomain.cloud/api/review'
-        reviews = get_dealer_reviews_from_cf(url, dealer_id=dealer_id)
-        context = {
-            "reviews":  reviews, 
-            "dealer_id": dealer_id
-        }
-
-        return render(request, 'djangoapp/dealer_details.html', context)
-
-# Create a `add_review` view to submit a review
-def add_review(request, dealer_id):
-    # User must be logged in before posting a review
-    if request.user.is_authenticated:
-        # GET request renders the page with the form for filling out a review
-        if request.method == "GET":
-            url = f"https://5b93346d.us-south.apigw.appdomain.cloud/dealerships/dealer-get?dealerId={dealer_id}"
-            # Get dealer details from the API
-            context = {
-                "cars": CarModel.objects.all(),
-                "dealer": get_dealer_by_id(url, dealer_id=dealer_id),
-            }
-            return render(request, 'djangoapp/add_review.html', context)
-
-        # POST request posts the content in the review submission form to the Cloudant DB using the post_review Cloud Function
-        if request.method == "POST":
-            form = request.POST
-            review = dict()
-            review["name"] = f"{request.user.first_name} {request.user.last_name}"
-            review["dealership"] = dealer_id
-            review["review"] = form["content"]
-            review["purchase"] = form.get("purchasecheck")
-            if review["purchase"]:
-                review["purchase_date"] = datetime.strptime(form.get("purchasedate"), "%m/%d/%Y").isoformat()
-            car = CarModel.objects.get(pk=form["car"])
-            review["car_make"] = car.car_make.name
-            review["car_model"] = car.name
-            review["car_year"] = car.year
-            
-            # If the user bought the car, get the purchase date
-            if form.get("purchasecheck"):
-                review["purchase_date"] = datetime.strptime(form.get("purchasedate"), "%m/%d/%Y").isoformat()
-            else: 
-                review["purchase_date"] = None
-
-            url = "https://9bebcb01.eu-de.apigw.appdomain.cloud/api/review"  # API Cloud Function route
-            json_payload = {"review": review}  # Create a JSON payload that contains the review data
-
-            # Performing a POST request with the review
-            result = post_request(url, json_payload, dealerId=dealer_id)
-            if int(result.status_code) == 200:
-                print("Review posted successfully.")
-
-            # After posting the review the user is redirected back to the dealer details page
-            return redirect("djangoapp:dealer_details", dealer_id=dealer_id)
-
-    else:
-        # If user isn't logged in, redirect to login page
-        print("User must be authenticated before posting a review. Please log in.")
-        return redirect("/djangoapp/login")
-
+def analyze_review_sentiments(text):
+    api_key = "jodKrssFMD-TIzy9ZBjreDhAQXunBZ0QADPvvm84keIG"
+    url = "https://api.au-syd.natural-language-understanding.watson.cloud.ibm.com/instances/ed95a740-16c3-4916-a3a8-2896f23216f0"
+    authenticator = IAMAuthenticator(api_key)
+    natural_language_understanding = NaturalLanguageUnderstandingV1(
+        version='2020-08-01',
+        authenticator=authenticator
+    )
+    natural_language_understanding.set_service_url(url)
+    response = natural_language_understanding.analyze(
+        language='en',
+        text=text,
+        features= Features(sentiment= SentimentOptions())
+    ).get_result()
+    sentiment_label = response["sentiment"]["document"]["label"]
+    sentimentresult = sentiment_label
+    return sentimentresult
